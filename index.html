@@ -1220,14 +1220,14 @@ const box=$('input_status');
 if(miss.length){
 const shown=miss.slice(0,12).join('、')+(miss.length>12?` 等共 ${miss.length} 项`:'');
 box.innerHTML=`<b>请先在左侧完成参数输入，计算结果才会显示。</b><br>尚缺或有误：${shown}`;
-box.classList.add('show');
+box.classList.add('show'); box.dataset.miss='1';
 $('cycle_seg_count').textContent=`${cycleState.segments.length}段`;
 $('cy_summary').textContent='';
 document.querySelectorAll('.right .page').forEach(pg=>pg.style.visibility='hidden');
 RESULTS={};
 return false;
 }
-box.classList.remove('show'); box.innerHTML='';
+box.classList.remove('show'); box.innerHTML=''; delete box.dataset.miss;
 document.querySelectorAll('.right .page').forEach(pg=>pg.style.visibility='');
 return true;
 }
@@ -1578,7 +1578,23 @@ cycleState.segments.splice(idx,1);
 buildCycleTable();
 recalcAll();
 }
-function renderAll(){ renderLoad(); renderPower(); renderFuel(); renderCycle(); renderUniversal(); }
+function renderAll(){
+const errs=[];
+[['负荷特性图',renderLoad],['功率平衡图',renderPower],['等速油耗图',renderFuel],['六工况循环',renderCycle],['万有特性图',renderUniversal]].forEach(([name,fn])=>{
+try{ fn(); }catch(e){ errs.push(name+'：'+((e&&e.message)||e)); console.error(name,e); }
+});
+const box=$('input_status');
+if(box){
+if(errs.length){ box.innerHTML='<b>部分图表绘制出错（其余结果不受影响）</b><br>'+errs.map(t=>String(t).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))).join('<br>'); box.classList.add('show'); }
+else if(!box.dataset.miss){ box.classList.remove('show'); box.innerHTML=''; }
+}
+requestAnimationFrame(()=>refreshVisibleCharts());
+}
+function refreshVisibleCharts(){
+Object.values(charts).forEach(c=>{
+try{ if(c&&c.canvas&&c.canvas.offsetParent!==null){ c.resize(); c.update('none'); } }catch(e){}
+});
+}
 const CHARTSCALES=(xtitle,ytitle,xmin,xmax,ymin,ymax)=>({
 x:{type:'linear',title:{display:true,text:xtitle,color:'#7090b8',font:{size:13}},
 min:xmin,max:xmax,grid:{color:'#1e3050'},ticks:{color:'#7090b8'}},
@@ -1684,15 +1700,23 @@ ua = 0.377·r·n/(ig·i₀)   [km/h]
 function renderFuel(){
 const r=RESULTS;
 const top=r.gear_curves[r.gear_type-1], sec=r.gear_curves[r.gear_type-2];
+const n69=i=>r.p.nmin+(r.p.nmax-r.p.nmin)*i/68;
+const spOk=polyState.speeds.filter(Number.isFinite);
+const nLoT=spOk.length?Math.min(...spOk):r.p.nmin, nHiT=spOk.length?Math.max(...spOk):r.p.nmax;
+const fuelPts=gc=>gc.ua_69.map((ua,i)=>({x:ua,y:gc.Qs_69[i],n:Math.round(n69(i))}))
+.filter(pt=>pt.n>=nLoT-1e-6&&pt.n<=nHiT+1e-6&&Number.isFinite(pt.x)&&Number.isFinite(pt.y)&&pt.x>0&&pt.y>0&&pt.y<50);
+const dTop=fuelPts(top), dSec=fuelPts(sec);
+const yTop=Math.max(0,...dTop.map(q=>q.y),...dSec.map(q=>q.y));
+const yMaxFuel=yTop>35?Math.ceil(yTop/5)*5:35;
 mkChart('chart_fuel',{type:'scatter',data:{datasets:[
 {label:`最高档 ${GEAR_NAMES[r.gear_type-1]}（ig=${r.ig_top}）`,
-data:top.ua_69.map((ua,i)=>({x:ua,y:top.Qs_69[i],n:(i+12)*50})).filter(pt=>pt.n>=Math.min(...polyState.speeds)&&pt.n<=Math.max(...polyState.speeds)&&pt.x>0&&pt.y>0&&pt.y<50),
+data:dTop,
 borderColor:'#4d9fff',borderWidth:2.5,pointRadius:0,showLine:true,tension:0.3},
 {label:`次高档 ${GEAR_NAMES[r.gear_type-2]}（ig=${r.ig_2nd}）`,
-data:sec.ua_69.map((ua,i)=>({x:ua,y:sec.Qs_69[i],n:(i+12)*50})).filter(pt=>pt.n>=Math.min(...polyState.speeds)&&pt.n<=Math.max(...polyState.speeds)&&pt.x>0&&pt.y>0&&pt.y<50),
+data:dSec,
 borderColor:'#ff6b5a',borderWidth:2.5,pointRadius:0,showLine:true,tension:0.3},
 ]},options:{responsive:true,animation:{duration:300},plugins:{legend:LEGEND},
-scales:CHARTSCALES('车速 ua (km/h)','百公里油耗 Qs (L/100km)',0,null,0,35)}});
+scales:CHARTSCALES('车速 ua (km/h)','百公里油耗 Qs (L/100km)',0,null,0,yMaxFuel)}});
 function getQs(gc,u){
 const xs=gc.ua_69, ys=gc.Qs_69;
 if(!(u>=xs[0]&&u<=xs[xs.length-1])) return null;
@@ -1710,8 +1734,8 @@ const d=(a!==null&&b!==null)?((b-a)/a*100).toFixed(2)+'%':'—';
 return `<tr><td class="label">${u}</td><td class="hi">${f(a)}</td><td class="hi">${f(b)}</td><td>${d}</td></tr>`; }).join('')+'</tbody>';
 }
 const q_top60=getQs(top,60), q_sec60=getQs(sec,60);
-const nLo=Math.min(...polyState.speeds), nHi=Math.max(...polyState.speeds);
-const inRng=i=>{const nn=(i+12)*50; return nn>=nLo-1e-6&&nn<=nHi+1e-6;};
+const nLo=nLoT, nHi=nHiT;
+const inRng=i=>{const nn=n69(i); return nn>=nLo-1e-6&&nn<=nHi+1e-6;};
 let iMin=-1;
 top.Qs_69.forEach((q,i)=>{ if(inRng(i)&&q>0&&q<100&&(iMin<0||q<top.Qs_69[iMin])) iMin=i; });
 const q_min=iMin>=0?top.Qs_69[iMin]:0;
@@ -1719,8 +1743,8 @@ $('fuel_cards').innerHTML=[
 {label:'60km/h油耗（顶档）',val:q_top60?q_top60.toFixed(2):'—',unit:'L/100km',color:'blue'},
 {label:'60km/h油耗（次高档）',val:q_sec60?q_sec60.toFixed(2):'—',unit:'L/100km',color:'red'},
 {label:'最省油车速（顶档）',val:iMin>=0?top.ua_69[iMin].toFixed(1):'—',unit:'km/h',
-note:`Qs_min=${q_min.toFixed(2)}L/100km（n=${iMin>=0?(iMin+12)*50:'—'} r/min，试验转速范围内）`,color:'green'},
-{label:'顶档速度范围',val:`${(top.ua_69[0]*nLo/600).toFixed(1)}~${(top.ua_69[0]*nHi/600).toFixed(1)}`,unit:'km/h',color:'amber'},
+note:`Qs_min=${q_min.toFixed(2)}L/100km（n=${iMin>=0?Math.round(n69(iMin)):'—'} r/min，试验转速范围内）`,color:'green'},
+{label:'顶档速度范围',val:`${(top.ua_69[0]*nLo/r.p.nmin).toFixed(1)}~${(top.ua_69[0]*nHi/r.p.nmin).toFixed(1)}`,unit:'km/h',color:'amber'},
 ].map(c=>`<div class="card ${c.color}"><div class="card-label">${c.label}</div>
 <div class="card-val">${c.val}<span class="card-unit">${c.unit}</span></div>
 ${c.note?`<div class="card-note">${c.note}</div>`:''}</div>`).join('');
@@ -2110,6 +2134,7 @@ function switchTab(name){
 document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
 document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
 $('tab_'+name).classList.add('active'); $('page_'+name).classList.add('active');
+requestAnimationFrame(()=>refreshVisibleCharts());
 }
 const MY_BASE_KEY='fuelEcon_student_myBaseline_v1';
 function saveMyBaseline(){
